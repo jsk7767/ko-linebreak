@@ -71,11 +71,27 @@ h1,h2,h3{text-wrap:balance}                           /* 제목 균형 분할 */
 | Markdown/플레인 | 2·3단계를 실제 개행으로. MD 줄바꿈 유지는 줄 끝 공백 2개 또는 `<br>` |
 | PPTX | `py -3 -m pip install python-pptx` 후 텍스트프레임 순회 — 2·3단계 지점에 소프트 리턴(`\n`) 삽입. 제목은 두 줄 길이 균형(balance) |
 | DOCX/HWP | docx는 python-docx 동일 원리. HWP는 텍스트 추출 → 수정본 전달 |
-| 참고 | 구문 '허용 지점' 자동화는 google/budoux(ja·zh·th, 한국어 모델 없음)·Chrome `word-break:auto-phrase`. '아름다운 지점' 판단은 이 스킬의 2·3단계로 직접 |
+| 참고 | 구문 '허용 지점' 자동화는 google/budoux(ja·zh·th, 한국어 모델 없음 — 2026-09 재확인)·Chrome `word-break:auto-phrase`. 이 스킬의 `kolb.chunk_phrases` 가 한국어 조사·어미 규칙으로 같은 일을 한다. 문장 경계는 hyunwoongko/kss 가 있으면 자동 사용 |
 
-## 절차
+## 절차 (v2 — 도구 3종)
 
-1. `py -3 <이 스킬 폴더>/scripts/check.py <파일>` — CSS 누락·미개행 블록·절 분리 후보 리포트. `--suggest`를 붙이면 문장 단위 개행 제안본을 함께 출력.
-2. 리포트된 블록마다 2·3단계로 개행 삽입(의미 경계는 직접 판단, 문구 불변).
-3. 재실행 — CSS PASS + 필수(미개행) 0 확인. 절 후보는 감성/정보성 구분해 판단.
-4. 결과를 개행된 인용 블록으로 사용자에게 보여주고, 제외한 블록은 사유 1줄.
+```bash
+S=~/.claude/skills/ko-linebreak/scripts
+py -3 $S/check.py FILE.html                     # 1) 정적 점검: CSS·미개행·줄머리 조사·nb 길이·금지위치 (--json 가능)
+py -3 $S/fix.py FILE.html --sentences --clauses 45 --nb "h1,.lede" --css   # 2) 미리보기(diff)
+py -3 $S/fix.py FILE.html --sentences --clauses 45 --nb "h1,.lede" --css --write   #    백업 후 적용
+py -3 $S/render_check.py FILE.html --widths 390,768,1280 [--outline shot.png]     # 3) Chromium 실측: 어절 중간 꺾임·nb 갈림/넘침·자동 wrap 줄머리·외톨이
+```
+
+1. `check.py` 로 필수 위반을 본다. 문장 경계는 kss 가 설치돼 있으면 kss, 없으면 내장 정규식(종결부호+인용부호, 소수점·전화번호 보호).
+2. `fix.py` 는 **문구를 바꾸지 않는다** — `<br>`·`<span class="nb">`·CSS만 넣고, 적용 전에 순수 텍스트가 같은지 스스로 검증한다(다르면 중단). `--nb` 는 히어로·리드 같은 핵심 디스플레이 요소에만 준다. 덩어리 규칙: 쉼표·강한 조사(에서·으로·에·와·도) 뒤는 6자 이상이면 끊고, 약한 조사(을·를·은·는·이·가·의) 뒤는 8자 이상일 때만, 숫자 어절(16년·28,000원)은 뒤 명사와 붙인다. 최장 12자(공백·부호 제외).
+3. 자동 적용 뒤 **의미 경계는 사람이 한 번 본다** — 특히 `[절]`. 관형형 "~는 + 명사"가 갈렸으면 손으로 합친다.
+4. `render_check.py` 가 진짜 판정자다. 정적 점검이 못 보는 것(글꼴 크기에 따른 nb 넘침, `display:flex` 부모 안의 span 분리, 자동 wrap 으로 조사가 줄머리에 오는 것)을 390/768/1280 에서 잰다. `--outline` 으로 nb 경계(점선)와 `<br>`(⏎)를 찍은 스크린샷을 남겨 사용자에게 보여준다. `--font-scale 1.25` 로 큰 글씨 설정도 확인.
+5. 결과를 개행된 인용 블록으로 사용자에게 보여주고, 제외한 블록은 사유 1줄.
+
+### 함정 (실측에서 나온 것)
+- `display:flex` 인 `<summary>`·버튼 안에 `<span class="nb">` 를 넣으면 span 이 별도 flex 아이템이 되어 줄이 뒤집힌다 → 텍스트 전체를 `<span>` 하나로 감싼 뒤 그 안에서 nb.
+- nb 안에 `<em>` 같은 인라인 자식이 있으면 `getClientRects()` 가 여러 개다 — 세로 위치가 다를 때만 '갈림'으로 본다(render_check 반영).
+- 정적 nb 길이 기준(18자)은 참고다. 15.5px 본문에서 24자 덩어리는 390px 을 넘쳤고, 12.5px small 에서 26자는 안 넘쳤다. 넘침은 실측으로만 확정.
+- `text-wrap: pretty/balance` 는 브라우저 지원이 다르다(caniuse 확인). 미지원 환경의 외톨이는 nb 청킹이 유일한 통제 수단이고, 제목 균형은 adobe/balance-text·nytimes/text-balancer 같은 JS 폴백이 있다.
+- 파이썬 re 는 가변폭 lookbehind 를 거부한다 — 연결어미 매치는 어미를 매치에 포함하고 경계는 `m.end()` 로 잡는다.
